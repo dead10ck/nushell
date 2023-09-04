@@ -38,6 +38,12 @@ impl Command for IntoSqliteDb {
                 "Specify table name to store the data in",
                 Some('t'),
             )
+            .named(
+                "primary-key",
+                SyntaxShape::String,
+                "Name of the primary key column, if the table is created",
+                Some('p'),
+            )
     }
 
     fn run(
@@ -82,12 +88,14 @@ impl Command for IntoSqliteDb {
 struct Table {
     conn: rusqlite::Connection,
     table_name: String,
+    primary_key: Option<String>,
 }
 
 impl Table {
     pub fn new(
         db_path: &Spanned<String>,
         table_name: Option<Spanned<String>>,
+        primary_key: Option<Spanned<String>>,
     ) -> Result<Self, nu_protocol::ShellError> {
         let table_name = if let Some(table_name) = table_name {
             table_name.item
@@ -98,7 +106,11 @@ impl Table {
         // create the sqlite database table
         let conn = open_sqlite_db(Path::new(&db_path.item), db_path.span)?;
 
-        Ok(Self { conn, table_name })
+        Ok(Self {
+            conn,
+            table_name,
+            primary_key: primary_key.map(|spanned| spanned.item),
+        })
     }
 
     pub fn name(&self) -> &String {
@@ -117,7 +129,13 @@ impl Table {
             self.table_name,
             columns
                 .into_iter()
-                .map(|(col_name, sql_type)| format!("{col_name} {sql_type}"))
+                .map(|(col_name, sql_type)| format!(
+                    "{col_name} {sql_type}{primary}",
+                    primary = match &self.primary_key {
+                        Some(pcol) if pcol == &col_name => " PRIMARY KEY",
+                        _ => "",
+                    }
+                ))
                 .collect::<Vec<_>>()
                 .join(", ")
         );
@@ -153,8 +171,9 @@ fn operate(
 ) -> Result<PipelineData, ShellError> {
     let span = call.head;
     let file_name: Spanned<String> = call.req(engine_state, stack, 0)?;
-    let table_name: Option<Spanned<String>> = call.get_flag(engine_state, stack, "table_name")?;
-    let table = Table::new(&file_name, table_name)?;
+    let table_name: Option<Spanned<String>> = call.get_flag(engine_state, stack, "table-name")?;
+    let primary_key: Option<Spanned<String>> = call.get_flag(engine_state, stack, "primary-key")?;
+    let table = Table::new(&file_name, table_name, primary_key)?;
 
     match action(input, table, span) {
         Ok(val) => Ok(val.into_pipeline_data()),
@@ -162,19 +181,19 @@ fn operate(
     }
 }
 
-fn action(input: PipelineData, table: Table, span: Span) -> Result<Value, ShellError> {
+fn action(input: PipelineData, table: Table, call_head: Span) -> Result<Value, ShellError> {
     match input {
         PipelineData::ListStream(list_stream, _) => {
-            insert_in_transaction(list_stream.stream, list_stream.ctrlc, span, table)
+            insert_in_transaction(list_stream.stream, list_stream.ctrlc, call_head, table)
         }
         PipelineData::Value(val, _) => {
-            insert_in_transaction(std::iter::once(val), None, span, table)
+            insert_in_transaction(std::iter::once(val), None, call_head, table)
         }
         _ => Err(ShellError::OnlySupportsThisInputType {
             exp_input_type: "list".into(),
             wrong_type: "".into(),
-            dst_span: span,
-            src_span: span,
+            dst_span: call_head,
+            src_span: call_head,
         }),
     }
 }
@@ -182,12 +201,12 @@ fn action(input: PipelineData, table: Table, span: Span) -> Result<Value, ShellE
 fn insert_in_transaction(
     stream: impl Iterator<Item = Value>,
     ctrlc: Option<Arc<AtomicBool>>,
-    span: Span,
+    call_head: Span,
     mut table: Table,
 ) -> Result<Value, ShellError> {
     let mut stream = stream.peekable();
     let first_val = match stream.peek() {
-        None => return Ok(Value::nothing(span)),
+        None => return Ok(Value::nothing(call_head)),
         Some(val) => val.as_record()?,
     };
 
@@ -240,7 +259,7 @@ fn insert_in_transaction(
         )
     })?;
 
-    Ok(Value::nothing(span))
+    Ok(Value::nothing(call_head))
 }
 
 fn insert_value(
