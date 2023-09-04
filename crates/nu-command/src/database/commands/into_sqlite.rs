@@ -49,6 +49,11 @@ impl Command for IntoSqliteDb {
                 "When the input database and table already exist, overwrite the given table, rather than append to it",
                 Some('o'),
             )
+            .switch(
+                "replace",
+                "Use INSERT OR REPLACE to update tables with uniqueness constraints",
+                Some('r'),
+            )
     }
 
     fn run(
@@ -94,6 +99,7 @@ struct Table {
     conn: rusqlite::Connection,
     table_name: String,
     overwrite_on_init: bool,
+    replace: bool,
     primary_key: Option<String>,
 }
 
@@ -102,6 +108,7 @@ impl Table {
         db_path: &Spanned<String>,
         table_name: Option<Spanned<String>>,
         overwrite_on_init: bool,
+        replace: bool,
         primary_key: Option<Spanned<String>>,
     ) -> Result<Self, nu_protocol::ShellError> {
         let table_name = if let Some(table_name) = table_name {
@@ -117,6 +124,7 @@ impl Table {
             conn,
             table_name,
             overwrite_on_init,
+            replace,
             primary_key: primary_key.map(|spanned| spanned.item),
         })
     }
@@ -198,7 +206,8 @@ fn operate(
     let table_name: Option<Spanned<String>> = call.get_flag(engine_state, stack, "table-name")?;
     let primary_key: Option<Spanned<String>> = call.get_flag(engine_state, stack, "primary-key")?;
     let overwrite: bool = call.has_flag("overwrite");
-    let table = Table::new(&file_name, table_name, overwrite, primary_key)?;
+    let replace: bool = call.has_flag("replace");
+    let table = Table::new(&file_name, table_name, overwrite, replace, primary_key)?;
 
     match action(input, table, span) {
         Ok(val) => Ok(val.into_pipeline_data()),
@@ -236,9 +245,15 @@ fn insert_in_transaction(
     };
 
     let table_name = table.name().clone();
+    let insert_action = match table.replace {
+        false => "INSERT",
+        true => "INSERT OR REPLACE",
+    };
+
     let tx = table.try_init(first_val)?;
+
     let insert_statement = format!(
-        "INSERT INTO [{}] VALUES ({})",
+        "{insert_action} INTO [{}] VALUES ({})",
         table_name,
         ["?"].repeat(first_val.vals.len()).join(", ")
     );
