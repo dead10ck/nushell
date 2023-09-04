@@ -44,6 +44,11 @@ impl Command for IntoSqliteDb {
                 "Name of the primary key column, if the table is created",
                 Some('p'),
             )
+            .switch(
+                "overwrite",
+                "When the input database and table already exist, overwrite the given table, rather than append to it",
+                Some('o'),
+            )
     }
 
     fn run(
@@ -88,6 +93,7 @@ impl Command for IntoSqliteDb {
 struct Table {
     conn: rusqlite::Connection,
     table_name: String,
+    overwrite_on_init: bool,
     primary_key: Option<String>,
 }
 
@@ -95,6 +101,7 @@ impl Table {
     pub fn new(
         db_path: &Spanned<String>,
         table_name: Option<Spanned<String>>,
+        overwrite_on_init: bool,
         primary_key: Option<Spanned<String>>,
     ) -> Result<Self, nu_protocol::ShellError> {
         let table_name = if let Some(table_name) = table_name {
@@ -109,6 +116,7 @@ impl Table {
         Ok(Self {
             conn,
             table_name,
+            overwrite_on_init,
             primary_key: primary_key.map(|spanned| spanned.item),
         })
     }
@@ -121,6 +129,22 @@ impl Table {
         &mut self,
         record: &Record,
     ) -> Result<rusqlite::Transaction, nu_protocol::ShellError> {
+        let table_name = self.name();
+
+        if self.overwrite_on_init {
+            self.conn
+                .execute(&format!("DROP TABLE [{table_name}];"), [])
+                .map_err(|err| {
+                    ShellError::GenericError(
+                        "Failed to drop table '{table_name}'".into(),
+                        err.to_string(),
+                        None,
+                        None,
+                        Vec::new(),
+                    )
+                })?;
+        }
+
         let columns = get_columns_with_sqlite_types(record)?;
 
         // create a string for sql table creation
@@ -173,7 +197,8 @@ fn operate(
     let file_name: Spanned<String> = call.req(engine_state, stack, 0)?;
     let table_name: Option<Spanned<String>> = call.get_flag(engine_state, stack, "table-name")?;
     let primary_key: Option<Spanned<String>> = call.get_flag(engine_state, stack, "primary-key")?;
-    let table = Table::new(&file_name, table_name, primary_key)?;
+    let overwrite: bool = call.has_flag("overwrite");
+    let table = Table::new(&file_name, table_name, overwrite, primary_key)?;
 
     match action(input, table, span) {
         Ok(val) => Ok(val.into_pipeline_data()),
@@ -274,9 +299,11 @@ fn insert_value(
             insert_statement
                 .execute(rusqlite::params_from_iter(sql_vals))
                 .map_err(|e| {
+                    log::error!("error inserting: {:?}", e);
+
                     ShellError::GenericError(
-                        "Failed to execute SQLite statement".into(),
-                        e.to_string(),
+                        "Failed to insert value".into(),
+                        format!("{:?}", e),
                         None,
                         None,
                         Vec::new(),
