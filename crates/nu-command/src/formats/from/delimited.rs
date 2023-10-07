@@ -1,9 +1,12 @@
-use csv::{ReaderBuilder, Trim};
-use nu_protocol::{IntoPipelineData, PipelineData, Record, ShellError, Span, Value};
+use std::sync::{atomic::AtomicBool, Arc};
 
-fn from_delimited_string_to_value(
+use csv::{ReaderBuilder, Trim};
+use nu_protocol::{IntoInterruptiblePipelineData, PipelineData, Record, ShellError, Span, Value};
+
+fn from_delimited_to_values<R>(
     DelimitedReaderConfig {
         separator,
+        record_separator: _,
         comment,
         quote,
         escape,
@@ -12,9 +15,12 @@ fn from_delimited_string_to_value(
         no_infer,
         trim,
     }: DelimitedReaderConfig,
-    s: String,
+    reader: R,
     span: Span,
-) -> Result<Value, csv::Error> {
+) -> csv::Result<impl Iterator<Item = Value> + Send + 'static>
+where
+    R: std::io::Read + Send + 'static,
+{
     let mut reader = ReaderBuilder::new()
         .has_headers(!noheaders)
         .flexible(flexible)
@@ -23,7 +29,7 @@ fn from_delimited_string_to_value(
         .quote(quote as u8)
         .escape(escape.map(|c| c as u8))
         .trim(trim)
-        .from_reader(s.as_bytes());
+        .from_reader(reader);
 
     let headers = if noheaders {
         (1..=reader.headers()?.len())
@@ -33,37 +39,51 @@ fn from_delimited_string_to_value(
         reader.headers()?.iter().map(String::from).collect()
     };
 
-    let mut rows = vec![];
-    for row in reader.records() {
-        let mut output_row = vec![];
-        for value in row?.iter() {
-            if no_infer {
-                output_row.push(Value::string(value.to_string(), span));
-                continue;
-            }
+    Ok(reader
+        .into_records()
+        .scan(
+            headers,
+            move |headers, row: csv::Result<csv::StringRecord>| {
+                let row = match row {
+                    Err(err) => {
+                        eprintln!("Error parsing CSV record: {}", err);
+                        return None;
+                    }
+                    Ok(row) => row,
+                };
 
-            if let Ok(i) = value.parse::<i64>() {
-                output_row.push(Value::int(i, span));
-            } else if let Ok(f) = value.parse::<f64>() {
-                output_row.push(Value::float(f, span));
-            } else {
-                output_row.push(Value::string(value.to_string(), span));
-            }
-        }
-        rows.push(Value::record(
-            Record {
-                cols: headers.clone(),
-                vals: output_row,
+                let mut output_row = Vec::with_capacity(row.len());
+
+                for value in row.iter() {
+                    if no_infer {
+                        output_row.push(Value::string(value.to_string(), span));
+                        continue;
+                    }
+
+                    if let Ok(i) = value.parse::<i64>() {
+                        output_row.push(Value::int(i, span));
+                    } else if let Ok(f) = value.parse::<f64>() {
+                        output_row.push(Value::float(f, span));
+                    } else {
+                        output_row.push(Value::string(value.to_string(), span));
+                    }
+                }
+
+                Some(Value::record(
+                    Record {
+                        cols: headers.clone(),
+                        vals: output_row,
+                    },
+                    span,
+                ))
             },
-            span,
-        ));
-    }
-
-    Ok(Value::list(rows, span))
+        )
+        .fuse())
 }
 
 pub(super) struct DelimitedReaderConfig {
     pub separator: char,
+    pub record_separator: char,
     pub comment: Option<char>,
     pub quote: char,
     pub escape: Option<char>,
@@ -76,16 +96,27 @@ pub(super) struct DelimitedReaderConfig {
 pub(super) fn from_delimited_data(
     config: DelimitedReaderConfig,
     input: PipelineData,
-    name: Span,
+    span: Span,
+    ctrlc: Option<Arc<AtomicBool>>,
 ) -> Result<PipelineData, ShellError> {
-    let (concat_string, _span, metadata) = input.collect_string_strict(name)?;
+    let (reader, span, metadata) = input.into_reader(
+        span,
+        Some(
+            u8::try_from(config.record_separator).map_err(|err| ShellError::IncorrectValue {
+                msg: format!("Invalid separator: {}", err),
+                val_span: span,
+                call_span: span,
+            })?,
+        ),
+    )?;
 
-    Ok(from_delimited_string_to_value(config, concat_string, name)
-        .map_err(|x| ShellError::DelimiterError {
-            msg: x.to_string(),
-            span: name,
-        })?
-        .into_pipeline_data_with_metadata(metadata))
+    let csv_err = |err: csv::Error| {
+        ShellError::GenericError("CSVError".into(), err.to_string(), Some(span), None, vec![])
+    };
+
+    Ok(from_delimited_to_values(config, reader, span)
+        .map_err(csv_err)?
+        .into_pipeline_data_with_metadata(metadata, ctrlc))
 }
 
 pub fn trim_from_str(trim: Option<Value>) -> Result<Trim, ShellError> {

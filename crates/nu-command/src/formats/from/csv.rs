@@ -132,7 +132,7 @@ fn from_csv(
     call: &Call,
     input: PipelineData,
 ) -> Result<PipelineData, ShellError> {
-    let name = call.head;
+    let span = call.head;
 
     let separator = match call.get_flag::<String>(engine_state, stack, "separator")? {
         Some(sep) => {
@@ -170,6 +170,7 @@ fn from_csv(
 
     let config = DelimitedReaderConfig {
         separator,
+        record_separator: '\n',
         comment,
         quote,
         escape,
@@ -179,7 +180,7 @@ fn from_csv(
         trim,
     };
 
-    from_delimited_data(config, input, name)
+    from_delimited_data(config, input, span, engine_state.ctrlc.clone())
 }
 
 #[cfg(test)]

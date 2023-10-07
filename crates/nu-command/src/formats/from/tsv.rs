@@ -143,6 +143,7 @@ fn from_tsv(
 
     let config = DelimitedReaderConfig {
         separator: '\t',
+        record_separator: '\n',
         comment,
         quote,
         escape,
@@ -152,7 +153,7 @@ fn from_tsv(
         trim,
     };
 
-    from_delimited_data(config, input, name)
+    from_delimited_data(config, input, name, engine_state.ctrlc.clone())
 }
 
 #[cfg(test)]
