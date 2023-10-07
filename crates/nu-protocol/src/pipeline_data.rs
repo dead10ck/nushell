@@ -4,8 +4,11 @@ use crate::{
     format_error, Config, ListStream, RawStream, ShellError, Span, Value,
 };
 use nu_utils::{stderr_write_all_and_flush, stdout_write_all_and_flush};
-use std::sync::{atomic::AtomicBool, Arc};
 use std::thread;
+use std::{
+    collections::VecDeque,
+    sync::{atomic::AtomicBool, Arc},
+};
 
 const LINE_ENDING_PATTERN: &[char] = &['\r', '\n'];
 
@@ -63,6 +66,12 @@ pub enum DataSource {
     Ls,
     HtmlThemes,
 }
+
+type StreamReaderOutput = (
+    Box<dyn std::io::Read + Send>,
+    Span,
+    Option<PipelineMetadata>,
+);
 
 impl PipelineData {
     pub fn new_with_metadata(metadata: Option<PipelineMetadata>, span: Span) -> PipelineData {
@@ -375,6 +384,44 @@ impl PipelineData {
                 span,
                 ..
             } => Ok((stdout.into_string()?.item, span, metadata)),
+        }
+    }
+
+    /// Returns a [`std::io::Read`] of the stream. The values in the stream must
+    /// be either a string or binary types, otherwise an error is returned.
+    pub fn into_reader<B: Into<u8>>(
+        self,
+        span: Span,
+        separator: Option<B>,
+    ) -> Result<StreamReaderOutput, ShellError> {
+        match self {
+            PipelineData::Empty => Ok((Box::new(std::io::empty()), span, None)),
+            PipelineData::Value(Value::String { val, .. }, metadata) => {
+                Ok((Box::new(VecDeque::from(val.into_bytes())), span, metadata))
+            }
+            PipelineData::Value(Value::Binary { val, .. }, metadata) => {
+                Ok((Box::new(VecDeque::from(val)), span, metadata))
+            }
+            PipelineData::Value(val, _) => Err(ShellError::TypeMismatch {
+                err_message: "string, binary".into(),
+                span: val.span(),
+            }),
+            PipelineData::ListStream(stream, metadata) => {
+                Ok((Box::new(stream.into_reader(separator)?), span, metadata))
+            }
+            PipelineData::ExternalStream {
+                stdout: None,
+                metadata,
+                span,
+                ..
+            } => Ok((Box::new(std::io::empty()), span, metadata)),
+            PipelineData::ExternalStream {
+                stdout: Some(stdout),
+                metadata,
+                span,
+                ..
+            // for raw streams, do not insert a separator
+            } => Ok((Box::new(stdout.into_reader::<u8>(None)?), span, metadata)),
         }
     }
 
