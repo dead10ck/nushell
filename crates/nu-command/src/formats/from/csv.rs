@@ -17,7 +17,10 @@ impl Command for FromCsv {
 
     fn signature(&self) -> Signature {
         Signature::build("from csv")
-            .input_output_types(vec![(Type::String, Type::Table(vec![]))])
+            .input_output_types(vec![
+                (Type::String, Type::Table(vec![])),
+                (Type::List(Box::new(Type::String)), Type::Table(vec![])),
+            ])
             .named(
                 "separator",
                 SyntaxShape::String,
@@ -93,6 +96,21 @@ impl Command for FromCsv {
                 ))
             },
             Example {
+                description: "Convert list of comma-separated strings to a table",
+                example: "['foo,bar,baz', 'quux,blerp,blorp'] | from csv",
+                result: Some(Value::list (
+                    vec![Value::test_record(Record {
+                        cols: vec!["foo".to_string(), "bar".to_string(), "baz".to_string()],
+                        vals: vec![
+                            Value::test_string("quux"),
+                            Value::test_string("blerp"),
+                            Value::test_string("blorp"),
+                        ],
+                    })],
+                    Span::test_data(),
+                ))
+            },
+            Example {
                 description: "Convert comma-separated data to a table, ignoring headers",
                 example: "open data.txt | from csv --noheaders",
                 result: None,
@@ -120,6 +138,11 @@ impl Command for FromCsv {
             Example {
                 description: "Convert comma-separated data to a table, dropping all possible whitespaces around field values",
                 example: "open data.txt | from csv --trim fields",
+                result: None,
+            },
+            Example {
+                description: "Convert comma-separated values to a table, manipulating the text before parsing",
+                example: "open --raw data.txt | lines | str replace 'foo' 'bar' | from csv",
                 result: None,
             },
         ]

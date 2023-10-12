@@ -402,6 +402,9 @@ impl PipelineData {
             PipelineData::Value(Value::String { val, .. }, metadata) => {
                 Ok((Box::new(VecDeque::from(val.into_bytes())), span, metadata))
             }
+            PipelineData::Value(Value::List { vals, .. }, metadata) => vals
+                .into_pipeline_data_with_metadata(metadata, None)
+                .into_reader(span, separator),
             PipelineData::Value(Value::Binary { val, .. }, metadata) => {
                 Ok((Box::new(VecDeque::from(val)), span, metadata))
             }
