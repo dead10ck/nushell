@@ -44,30 +44,24 @@ where
         .scan(
             headers,
             move |headers, row: csv::Result<csv::StringRecord>| {
-                let row = match row {
-                    Err(err) => {
-                        eprintln!("Error parsing CSV record: {}", err);
-                        return None;
-                    }
-                    Ok(row) => row,
-                };
-
-                let mut output_row = Vec::with_capacity(row.len());
-
-                for value in row.iter() {
-                    if no_infer {
-                        output_row.push(Value::string(value.to_string(), span));
-                        continue;
-                    }
-
-                    if let Ok(i) = value.parse::<i64>() {
-                        output_row.push(Value::int(i, span));
-                    } else if let Ok(f) = value.parse::<f64>() {
-                        output_row.push(Value::float(f, span));
-                    } else {
-                        output_row.push(Value::string(value.to_string(), span));
-                    }
-                }
+                let row = row?;
+                let output_row = (0..headers.len())
+                    .map(|i| {
+                        row.get(i)
+                            .map(|value| {
+                                if no_infer {
+                                    Value::string(value.to_string(), span)
+                                } else if let Ok(i) = value.parse::<i64>() {
+                                    Value::int(i, span)
+                                } else if let Ok(f) = value.parse::<f64>() {
+                                    Value::float(f, span)
+                                } else {
+                                    Value::string(value.to_string(), span)
+                                }
+                            })
+                            .unwrap_or(Value::nothing(span))
+                    })
+                    .collect::<Vec<Value>>();
 
                 Some(Value::record(
                     Record {
