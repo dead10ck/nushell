@@ -12,6 +12,7 @@ mod config_nu_default;
 mod continue_;
 mod conversions;
 mod cp;
+mod database;
 mod date;
 mod debug_info;
 mod def;
