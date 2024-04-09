@@ -96,6 +96,8 @@ impl NuCompleter {
             PipelineData::empty(),
         );
 
+        log::debug!("external completer result: {result:?}");
+
         match result {
             Ok(pd) => {
                 let value = pd.into_value(span);
