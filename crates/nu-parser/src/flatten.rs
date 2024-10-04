@@ -187,7 +187,10 @@ fn flatten_expression_into(
     expr: &Expression,
     output: &mut Vec<(Span, FlatShape)>,
 ) {
+    log::debug!("flattening expr: {:?}", expr);
+
     if let Some(custom_completion) = &expr.custom_completion {
+        log::debug!("using custom completion");
         output.push((expr.span, FlatShape::Custom(*custom_completion)));
         return;
     }
@@ -266,6 +269,14 @@ fn flatten_expression_into(
         }
         Expr::Call(call) => {
             let decl = working_set.get_decl(call.decl_id);
+            log::debug!("decl: {:?}", decl.name());
+
+            // if let Some(alias) = &decl.as_alias() {
+            //     log::debug!("alias: {alias:?}");
+            //     log::debug!("output: {output:?}");
+            //     flatten_expression_into(working_set, &alias.wrapped_call, output);
+            //     log::debug!("after output: {output:?}");
+            // }
 
             if call.head.end != 0 {
                 // Make sure we don't push synthetic calls

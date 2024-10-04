@@ -129,6 +129,7 @@ impl NuCompleter {
         let config = self.engine_state.get_config();
 
         let output = parse(&mut working_set, Some("completer"), line.as_bytes(), false);
+        log::debug!("parsed: {output:#?}");
 
         for pipeline in &output.pipelines {
             for pipeline_element in &pipeline.elements {
