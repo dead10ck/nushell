@@ -72,50 +72,49 @@ pub fn parse_shape_name(
         {
             parse_generic_shape(working_set, bytes, span, use_loc)
         }
-        _ => {
-            if bytes.contains(&b'@') {
-                let mut split = bytes.splitn(2, |b| b == &b'@');
+        _ if bytes.contains(&b'@') => {
+            let mut split = bytes.splitn(2, |b| b == &b'@');
 
-                let shape_name = split
-                    .next()
-                    .expect("If `bytes` contains `@` splitn returns 2 slices");
-                let shape_span = Span::new(span.start, span.start + shape_name.len());
-                let shape = parse_shape_name(working_set, shape_name, shape_span, use_loc);
-                if use_loc != ShapeDescriptorUse::Argument {
-                    let illegal_span = Span::new(span.start + shape_name.len(), span.end);
-                    working_set.error(ParseError::LabeledError(
-                        "Unexpected custom completer in type spec".into(),
-                        "Type specifications do not support custom completers".into(),
-                        illegal_span,
-                    ));
-                    return shape;
-                }
-
-                let cmd_span = Span::new(span.start + shape_name.len() + 1, span.end);
-                let cmd_name = split
-                    .next()
-                    .expect("If `bytes` contains `@` splitn returns 2 slices");
-
-                let cmd_name = trim_quotes(cmd_name);
-                if cmd_name.is_empty() {
-                    working_set.error(ParseError::Expected(
-                        "the command name of a completion function",
-                        cmd_span,
-                    ));
-                    return shape;
-                }
-
-                if let Some(decl_id) = working_set.find_decl(cmd_name) {
-                    SyntaxShape::CompleterWrapper(Box::new(shape), decl_id)
-                } else {
-                    working_set.error(ParseError::UnknownCommand(cmd_span));
-                    shape
-                }
-            } else {
-                //TODO: Handle error case for unknown shapes
-                working_set.error(ParseError::UnknownType(span));
-                SyntaxShape::Any
+            let shape_name = split
+                .next()
+                .expect("If `bytes` contains `@` splitn returns 2 slices");
+            let shape_span = Span::new(span.start, span.start + shape_name.len());
+            let shape = parse_shape_name(working_set, shape_name, shape_span, use_loc);
+            if use_loc != ShapeDescriptorUse::Argument {
+                let illegal_span = Span::new(span.start + shape_name.len(), span.end);
+                working_set.error(ParseError::LabeledError(
+                    "Unexpected custom completer in type spec".into(),
+                    "Type specifications do not support custom completers".into(),
+                    illegal_span,
+                ));
+                return shape;
             }
+
+            let cmd_span = Span::new(span.start + shape_name.len() + 1, span.end);
+            let cmd_name = split
+                .next()
+                .expect("If `bytes` contains `@` splitn returns 2 slices");
+
+            let cmd_name = trim_quotes(cmd_name);
+            if cmd_name.is_empty() {
+                working_set.error(ParseError::Expected(
+                    "the command name of a completion function",
+                    cmd_span,
+                ));
+                return shape;
+            }
+
+            if let Some(decl_id) = working_set.find_decl(cmd_name) {
+                SyntaxShape::CompleterWrapper(Box::new(shape), decl_id)
+            } else {
+                working_set.error(ParseError::UnknownCommand(cmd_span));
+                shape
+            }
+        }
+        _ => {
+            //TODO: Handle error case for unknown shapes
+            working_set.error(ParseError::UnknownType(span));
+            SyntaxShape::Any
         }
     }
 }
